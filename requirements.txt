@@ -1,0 +1,40 @@
+# Dépendances d'exécution de DeeKeep (Python 3.13, Windows).
+#
+# Reconstituées depuis les imports du code source : le venv du dossier ne
+# contenait plus que pip, « pip freeze » ne renvoyait donc rien. Les bornes
+# sont minimales et volontairement souples.
+#
+# Installation :
+#     py -3.13 -m venv .venv
+#     .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# Interface (QtWidgets/QtGui/QtCore) et QtMultimedia pour l'aperçu audio.
+# 6.11.0 est la dernière roue publiée ; elle embarque Qt 6.11.1, la version
+# relevée dans la build gelée (les deux numéros diffèrent, ne pas les confondre).
+PyQt6>=6.11.0
+
+# Téléchargement audio. Volontairement non épinglé : YouTube change
+# régulièrement et une version figée cesse de fonctionner en quelques mois.
+yt-dlp
+
+# Lecture et écriture des tags (ID3, FLAC) et des jaquettes.
+mutagen>=1.47
+
+# Appels HTTP : Deezer, MusicBrainz, AcoustID, récupération des pochettes,
+# base de données en ligne (Turso, protocole HTTP — voir cloud_db.py) et seau
+# de stockage objet du miroir Opus (S3 / R2 / B2 — voir blob_store.py). La
+# signature AWS SigV4 de ce dernier n'utilise que hmac et hashlib, de la
+# bibliothèque standard : pas de boto3, qui aurait alourdi l'exécutable d'une
+# quinzaine de mégaoctets pour signer trois sortes de requêtes.
+requests>=2.32
+
+# Le cache local de la base utilise sqlite3, module de la bibliothèque
+# standard : rien à installer.
+
+# Outils externes, hors pip :
+#   - ffmpeg/ffprobe : dossier « ffmpeg » de l'application (déjà présent).
+#   - deno           : dossier « deno » (exigé par yt-dlp pour YouTube).
+#   - fpcalc         : dossier « fpcalc » (Chromaprint), facultatif —
+#                      l'empreinte AcoustID retombe sinon sur ffmpeg.
+#   - pyinstaller    : nécessaire uniquement pour construire l'exécutable
+#                      (pip install pyinstaller && pyinstaller DeeKeep.spec).
