@@ -750,7 +750,7 @@ def build_local(roots=None, scan=True, include_secrets=False, verbose=True,
     # s'être effondré.
     summary = {name: db.count(name) for name in
                ("app_settings", "searches", "covers", "tracks", "quality",
-                "opus_mirror", "reference_durations")}
+                "archive", "reference_durations")}
     summary.update({
         "written_covers": len(covers.rows),
         "cover_bytes": db.query(
@@ -766,7 +766,7 @@ def build_local(roots=None, scan=True, include_secrets=False, verbose=True,
     say("Cache local : "
         + ", ".join(f"{summary[key]} {key}" for key in
                     ("app_settings", "searches", "covers", "tracks", "quality",
-                     "opus_mirror", "reference_durations")))
+                     "archive", "reference_durations")))
     say(f"Fichier {db.path} — {summary['cache_bytes'] / 1e6:.1f} Mo, "
         f"en {summary['seconds']} s")
     return summary

@@ -121,11 +121,6 @@ def default_settings():
         "org_dedup": True,
         # Volet des filtres déplié à l'ouverture de l'écran « Organiser ».
         "org_filters_open": False,
-        # --- Miroir Opus de la bibliothèque (écran « Bibliothèque ») ---
-        # Débit du réencodage envoyé au seau de stockage objet. 128 kb/s est
-        # le point où Opus cesse d'être distinguable de la source ; les clés
-        # du seau, elles, vivent dans « bucket.json » (voir blob_store).
-        "mirror_bitrate": 128,
         # Clé d'application AcoustID, gratuite et nominative
         # (https://acoustid.org/new-application) : sans elle, la recherche
         # de tags par empreinte acoustique est indisponible, le service

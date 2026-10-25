@@ -174,7 +174,7 @@ TABLES = [
             "« defects » sont des documents JSON.",
     ),
     TableSpec(
-        "opus_mirror",
+        "archive",
         pk="path",
         columns=[
             ("path", "TEXT"),
@@ -186,17 +186,19 @@ TABLES = [
             ("source_bytes", "INTEGER"),
             ("uploaded_at", "REAL"),
         ],
-        doc="Miroir Opus : pour chaque fichier de la bibliothèque envoyé au "
-            "seau de stockage objet, la clé sous laquelle il y est rangé et "
-            "le poids qu'il y occupe. Le flux audio, lui, n'est **pas** "
-            "stocké ici — 14 Go de musique ne tiennent pas dans les 5 Go de "
-            "l'offre Turso, et une base SQLite ne sait pas servir un "
-            "morceau par tranches (voir ``blob_store`` et ``opus_mirror``). "
+        doc="Index de l'archive : pour chaque fichier de la bibliothèque "
+            "copié, la clé sous laquelle il y est rangé et le poids qu'il y "
+            "occupe. L'audio, lui, n'est **pas** stocké ici — 14 Go de "
+            "musique ne tiennent pas dans les 5 Go de l'offre Turso. Il vit "
+            "dans une base SQLite à part, sur un disque à soi (voir "
+            "``sqlite_store``), d'où les titres ressortent octet pour octet. "
             "« stamp » est l'empreinte date+taille du fichier source : elle "
-            "signale un titre remplacé sur le disque, dont la copie en "
-            "ligne est devenue périmée. « sha1 » est celle de son contenu, "
-            "et donne la clé de l'objet — deux copies du même fichier "
-            "n'occupent qu'une place.",
+            "signale un titre remplacé sur le disque, dont la copie est "
+            "devenue périmée. « sha1 » est celle de son contenu, et donne la "
+            "clé de l'objet — deux copies du même fichier n'occupent qu'une "
+            "place. La table s'est longtemps appelée « opus_mirror », du "
+            "temps où la copie était réencodée en Opus pour tenir chez un "
+            "hébergeur ; elle ne l'est plus.",
     ),
     TableSpec(
         "reference_durations",
@@ -216,7 +218,7 @@ TABLES_BY_NAME = {spec.name: spec for spec in TABLES}
 # Ordre d'écriture : les jaquettes avant les titres, qui les référencent ;
 # le miroir Opus après eux, chacune de ses lignes désignant un titre.
 TABLE_ORDER = ["app_settings", "searches", "covers", "tracks", "quality",
-               "opus_mirror", "reference_durations"]
+               "archive", "reference_durations"]
 
 # Table de service, présente des deux côtés mais jamais synchronisée :
 # elle porte la version du schéma et l'identifiant de l'installation.
@@ -259,8 +261,8 @@ INDEX_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_tracks_history ON tracks (in_history)",
     "CREATE INDEX IF NOT EXISTS idx_tracks_updated ON tracks (updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_quality_updated ON quality (updated_at)",
-    "CREATE INDEX IF NOT EXISTS idx_mirror_sha1 ON opus_mirror (sha1)",
-    "CREATE INDEX IF NOT EXISTS idx_mirror_updated ON opus_mirror (updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_mirror_sha1 ON archive (sha1)",
+    "CREATE INDEX IF NOT EXISTS idx_mirror_updated ON archive (updated_at)",
 ]
 
 

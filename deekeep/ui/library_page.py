@@ -15,7 +15,7 @@ l'ouverture, ce qui suffit à distinguer un titre encore présent d'un titre
 disparu, et une copie en ligne à jour d'une copie périmée.
 
 Une exception, et elle se paie en dixièmes de seconde : les fichiers dont la
-base **ignore le débit** voient leur en-tête relu (``opus_mirror.probe_bitrate``).
+base **ignore le débit** voient leur en-tête relu (``library_mirror.probe_bitrate``).
 Ils sont deux cents, la lecture coûte 0,4 ms chacun, et sans elle le miroir
 se trompe deux fois — la jauge les compte pour incompressibles, et la colonne
 FORMAT les affiche sans débit.
@@ -35,11 +35,11 @@ réellement présentes dans la bibliothèque, chacune annoncée par sa nature
 clic remplit le champ et filtre — c'est le chemin le plus court entre un
 souvenir vague et l'album entier.
 
-Le **miroir Opus** (voir ``opus_mirror``) tient sur le même écran, et non
-dans un coin des Paramètres : le nuage n'est pas un réglage, c'est un état de
-la bibliothèque. La colonne NUAGE le dit titre par titre, et un titre dont le
-fichier a disparu du disque mais qui est en miroir reste écoutable — le
-lecteur joue alors le flux servi par le seau.
+L'**archive** (voir ``library_mirror``) tient sur le même écran, et non dans
+un coin des Paramètres : une copie n'est pas un réglage, c'est un état de la
+bibliothèque. La colonne NUAGE le dit titre par titre. Un titre dont le
+fichier a disparu du disque se restaure depuis l'archive, octet pour octet —
+elle ne diffuse pas de flux, il faut le rendre au disque pour l'écouter.
 """
 
 import os
@@ -53,10 +53,11 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QEvent, QTimer
 from PyQt6.QtGui import QColor
 
-from deekeep.audio import opus_mirror
+from deekeep.audio import library_mirror
 from deekeep.core.utils import reveal_in_explorer
-from deekeep.db import blob_store
+
 from deekeep.db import local_db
+from deekeep.db import sqlite_store
 from deekeep.library.library_index import canonical
 from deekeep.ui import player
 from deekeep.ui.styles import (ERROR, PRIMARY, TERTIARY, TEXT_FAINT,
@@ -276,11 +277,11 @@ class LibraryPage(QWidget):
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._stop_work)
 
-        self.btn_mirror = QPushButton("Envoyer au nuage")
+        self.btn_mirror = QPushButton("Archiver")
         self.btn_mirror.setProperty("class", "primary-btn")
         self.btn_mirror.setToolTip(
-            "Réencoder les titres cochés en Opus et les déposer dans le seau "
-            "de stockage — les fichiers d'origine ne sont pas touchés"
+            "Copier les titres cochés dans l'archive, tels quels — aucun "
+            "réencodage, les fichiers d'origine ne sont pas touchés"
         )
         self.btn_mirror.clicked.connect(self._start_mirror)
 
@@ -344,7 +345,7 @@ class LibraryPage(QWidget):
         self._on_cloud_panel_toggled(False)
         # Connexion tardive : alimenter la liste des débits émet
         # ``currentIndexChanged``, et le tableau n'existait pas encore.
-        self.combo_bitrate.currentIndexChanged.connect(self._on_bitrate_changed)
+        self.input_archive.editingFinished.connect(self._on_archive_changed)
 
     def _build_cloud_panel(self):
         """Volet repliable du miroir en ligne : seau, clés, débit."""
@@ -359,15 +360,14 @@ class LibraryPage(QWidget):
         panel.setSpacing(12)
 
         intro = QLabel(
-            "Le flux audio ne peut pas vivre dans la base — 14 Go de musique "
-            "ne tiennent pas dans les 5 Go de l'offre Turso, et une base "
-            "SQLite ne sait pas servir un morceau par tranches. Il part donc "
-            "dans un seau de stockage objet compatible S3 : 10 Go gratuits "
-            "chez Cloudflare R2 (sortie de données gratuite et illimitée) "
-            "comme chez Backblaze B2. Les titres y sont réencodés en Opus, et "
-            "ceux qui sont déjà plus légers que le débit demandé partent tels "
-            "quels — la ligne ci-dessous dit ce que cela pèsera. Les fichiers "
-            "d'origine restent intacts sur le disque."
+            "La copie de la bibliothèque vit dans une base SQLite, sur un "
+            "disque à soi. Les titres y entrent **tels quels**, octet pour "
+            "octet : rien n'est réencodé, rien n'est perdu, et une "
+            "restauration rend l'original — son empreinte est revérifiée à "
+            "la sortie. La seule limite est la place du disque, que la ligne "
+            "ci-dessous rappelle. Un seul fichier : le déplacer vers un "
+            "disque plus grand se résume à le copier, puis à corriger le "
+            "chemin ci-dessus. Les fichiers d'origine ne sont pas touchés."
         )
         intro.setWordWrap(True)
         intro.setStyleSheet("color: #849396; font-size: 11px;")
@@ -377,35 +377,15 @@ class LibraryPage(QWidget):
         grid.setHorizontalSpacing(18)
         grid.setVerticalSpacing(10)
 
-        self.input_endpoint = QLineEdit()
-        self.input_endpoint.setPlaceholderText(
-            "https://<compte>.r2.cloudflarestorage.com")
-        self.input_bucket = QLineEdit()
-        self.input_bucket.setPlaceholderText("nom du seau")
-        self.input_region = QLineEdit()
-        self.input_region.setPlaceholderText("auto (R2) / eu-central-003 (B2)")
-        self.input_access = QLineEdit()
-        self.input_access.setPlaceholderText("clé d'accès")
-        self.input_secret = QLineEdit()
-        self.input_secret.setPlaceholderText("clé secrète")
-        self.input_secret.setEchoMode(QLineEdit.EchoMode.Password)
-
-        self.combo_bitrate = QComboBox()
-        for rate in opus_mirror.BITRATES:
-            self.combo_bitrate.addItem("%d kb/s" % rate, rate)
-        self.combo_bitrate.setToolTip(
-            "Débit du réencodage Opus. 128 kb/s est transparent ou presque "
-            "sur de la musique ; 96 kb/s divise encore la place par quatre "
-            "face à un MP3 320."
+        self.input_archive = QLineEdit()
+        self.input_archive.setPlaceholderText(r"C:\temp\deekeep-archive.db")
+        self.input_archive.setToolTip(
+            "Fichier de l'archive. Un seul fichier : le déplacer vers un "
+            "autre disque se résume à le copier, puis à corriger ce chemin."
         )
 
         fields = (
-            ("Point d'entrée", self.input_endpoint),
-            ("Seau", self.input_bucket),
-            ("Région", self.input_region),
-            ("Clé d'accès", self.input_access),
-            ("Clé secrète", self.input_secret),
-            ("Débit Opus", self.combo_bitrate),
+            ("Fichier d'archive", self.input_archive),
         )
         for index, (label, widget) in enumerate(fields):
             row, column = divmod(index, 2)
@@ -416,21 +396,6 @@ class LibraryPage(QWidget):
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
         panel.addLayout(grid)
-
-        # Le miroir intégralement restaurable. Il ne se discute que jauge en
-        # main : il n'a de sens que si la bibliothèque tient dans l'offre
-        # gratuite, ce que la ligne ci-dessous dit à l'octet près.
-        self.cb_source_only = QCheckBox(
-            "Envoyer les fichiers tels quels, sans aucun réencodage")
-        self.cb_source_only.setToolTip(
-            "Le seau reçoit les fichiers d'origine, octet pour octet : le "
-            "miroir pèse le poids du disque, mais il se restaure "
-            "intégralement à l'identique. Sans cette case, les titres plus "
-            "lourds que le débit choisi sont réduits en Opus et ne peuvent "
-            "revenir qu'en Opus."
-        )
-        self.cb_source_only.stateChanged.connect(self._on_source_only_changed)
-        panel.addWidget(self.cb_source_only)
 
         self.lbl_gauge = QLabel("")
         self.lbl_gauge.setWordWrap(True)
@@ -481,194 +446,117 @@ class LibraryPage(QWidget):
 
     def _on_cloud_panel_toggled(self, opened):
         self.cloud_panel.setVisible(opened)
-        self.btn_cloud_panel.setText("▾ Nuage" if opened else "▸ Nuage")
+        self.btn_cloud_panel.setText("▾ Archive" if opened
+                                     else "▸ Archive")
 
     # ==================================================================
     # Paramètres persistants
     # ==================================================================
     def sync_from_settings(self):
-        """Relit les réglages du miroir (appelé à chaque affichage de la page)."""
-        rate = self._settings.get(opus_mirror.BITRATE_SETTING,
-                                  opus_mirror.DEFAULT_BITRATE)
-        index = self.combo_bitrate.findData(int(rate or 0))
+        """Relit l'emplacement de l'archive (à chaque affichage de la page).
+
+        Il n'y a plus que cela à relire. Le débit, le choix de réencoder et
+        la destination ont disparu avec le miroir Opus : un titre entre dans
+        l'archive tel quel, et il n'y a rien à régler.
+        """
         self._rendering = True
         try:
-            self.combo_bitrate.setCurrentIndex(index if index >= 0 else
-                                               self.combo_bitrate.findData(
-                                                   opus_mirror.DEFAULT_BITRATE))
-            self.cb_source_only.setChecked(
-                bool(self._settings.get(opus_mirror.SOURCE_ONLY_SETTING)))
+            self.input_archive.setText(sqlite_store.load_config()["root"])
         finally:
             self._rendering = False
-        self._sync_bitrate_enabled()
 
-    def _sync_bitrate_enabled(self):
-        """Le débit ne veut plus rien dire quand rien n'est réencodé."""
-        self.combo_bitrate.setEnabled(not self.source_only())
-
-    def _on_source_only_changed(self, *_args):
+    def _on_archive_changed(self, *_args):
+        """Nouvel emplacement saisi : le magasin ouvert ne vaut plus."""
         if self._rendering:
             return
-        self._settings[opus_mirror.SOURCE_ONLY_SETTING] = self.source_only()
-        if self._save_callback is not None:
-            self._save_callback()
-        self._sync_bitrate_enabled()
-        # Le sort de chaque titre change : ce qui partait en Opus part
-        # désormais tel quel, et la colonne NUAGE doit le redire.
-        self._refilter()
-
-    def source_only(self):
-        """Vrai si le miroir doit tout envoyer sans réencoder."""
-        return self.cb_source_only.isChecked()
-
-    def _on_bitrate_changed(self, *_args):
-        if self._rendering:
-            return
-        self._settings[opus_mirror.BITRATE_SETTING] = self.bitrate()
-        if self._save_callback is not None:
-            self._save_callback()
-        # Le débit fait partie de la clé de l'objet : les copies déjà en
-        # ligne ne correspondent plus au réglage courant, la colonne NUAGE
-        # doit le dire.
-        self._refilter()
-
-    def bitrate(self):
-        data = self.combo_bitrate.currentData()
-        return int(data or opus_mirror.DEFAULT_BITRATE)
-
-    def _projected_bytes(self, target):
-        """Poids attendu du miroir de toute la bibliothèque, à ce débit.
-
-        Un flux Opus à ``target`` kb/s pèse ``durée × débit / 8`` : la durée
-        et le débit de chaque fichier sont en base, l'estimation ne coûte
-        donc aucune lecture de disque. Les fichiers envoyés tels quels
-        comptent pour leur taille réelle — et, en mode « tout tel quel »,
-        c'est le poids du disque qui est rendu, sans une estimation.
-        """
-        only = self.source_only()
-        total = 0
-        for entry in self._entries:
-            if not entry["exists"]:
-                continue
-            planned, as_is = opus_mirror.plan(entry.get("bitrate"), target,
-                                              only)
-            if as_is:
-                total += int(entry.get("file_size") or 0)
-            else:
-                total += int(float(entry.get("duration") or 0) * planned * 125)
-        return total
+        self._store_cache = None
+        self._refresh_gauge()
+        self._refresh_controls()
 
     def _refresh_gauge(self):
-        """Annonce ce que chaque débit ferait peser, et lequel tient au chaud.
+        """Annonce ce que l'archive pèse, et ce qu'il reste de place.
 
-        Le calcul est refait à chaque changement de débit : c'est la seule
-        façon de choisir en connaissance de cause. Sur une bibliothèque déjà
-        en MP3 128, viser 128 en Opus ne gagne rien — la jauge le dit avant
-        que trois heures de réencodage ne le démontrent.
+        Il n'y a plus de débit à arbitrer ni d'offre gratuite à ne pas
+        dépasser : la seule question est celle du disque.
         """
         if not self._entries:
             self.lbl_gauge.setText("")
             return
-        target = self.bitrate()
-        projected = self._projected_bytes(target)
-        present = [entry for entry in self._entries if entry["exists"]]
-        source = sum(int(entry.get("file_size") or 0) for entry in present)
-        as_is = sum(1 for entry in present if entry.get("as_is"))
-        missing = len(self._entries) - len(present)
-        libre = blob_store.FREE_TIER_BYTES
-        verdict = ("tiennent dans les 10 Go gratuits"
-                   if projected <= libre else
-                   "dépassent les 10 Go gratuits de %s"
-                   % human_bytes(projected - libre))
-        reste = ""
-        if missing:
-            reste = (" %d autres titres, absents du disque, ne sont pas "
-                     "comptés." % missing)
+        self._refresh_archive_gauge(
+            [entry for entry in self._entries if entry["exists"]])
 
-        if self.source_only():
-            # Rien n'est réencodé : le miroir est le disque, et la
-            # restauration rend chaque titre octet pour octet. C'est la
-            # seule promesse que l'écran peut tenir entièrement.
+    def _refresh_archive_gauge(self, present):
+        """Ce que l'archive pèserait, face à la place réellement disponible.
+
+        Pas d'offre gratuite à opposer ici : la seule limite est le disque.
+        En revanche une mise en garde s'impose quand l'archive partage le
+        volume de la bibliothèque — elle protège alors d'un effacement par
+        mégarde, pas d'une panne.
+        """
+        poids = sum(int(entry.get("file_size") or 0) for entry in present)
+        chemin = (self.input_archive.text().strip()
+                  or sqlite_store.load_config()["root"])
+        if not chemin:
             self.lbl_gauge.setText(
-                "Sans réencodage, les %d titres présents sur le disque "
-                "pèseraient %s en ligne — leur poids exact : ils %s. Tous "
-                "reviendraient octet pour octet.%s"
-                % (len(present), human_bytes(projected), verdict, reste))
-            self.lbl_gauge.setStyleSheet(
-                "font-size: 11px; color: %s;"
-                % (TERTIARY if projected <= libre else PRIMARY))
+                "Indiquez le fichier d'archive : les %d titres présents sur "
+                "le disque y entreraient tels quels, soit %s."
+                % (len(present), human_bytes(poids)))
+            self.lbl_gauge.setStyleSheet("font-size: 11px; color: %s;" % PRIMARY)
             return
 
-        detail = ""
-        if as_is:
-            # Le cas piège : viser un débit au-dessus de celui de la
-            # bibliothèque ne gagne rien, et fait un miroir à l'identique.
-            # L'accord suit le compte : à 80 kb/s il ne reste qu'un seul
-            # fichier concerné sur cette bibliothèque, et « 1 d'entre eux
-            # sont » se lisait mal.
-            detail = (
-                (" 1 d'entre eux est déjà plus léger que %d kb/s et partirait "
-                 "tel quel, sans un octet de gagné." % target)
-                if as_is == 1 else
-                (" %d d'entre eux sont déjà plus légers que %d kb/s et "
-                 "partiraient tels quels, sans un octet de gagné."
-                 % (as_is, target)))
-        self.lbl_gauge.setText(
-            "À %d kb/s, les %d titres présents sur le disque pèseraient %s en "
-            "ligne contre %s ici : ils %s.%s%s"
-            % (target, len(present), human_bytes(projected),
-               human_bytes(source), verdict, detail, reste))
+        libre = sqlite_store.free_bytes(chemin)
+        tient = libre > poids * 1.1
+        memes = sqlite_store.same_device_as(
+            chemin, present[0]["path"] if present else chemin)
+        parts = [
+            "Les %d titres présents sur le disque entreraient tels quels "
+            "dans l'archive, soit %s — pour %s de libre sur son volume."
+            % (len(present), human_bytes(poids), human_bytes(libre))
+        ]
+        if not tient:
+            parts.append("La place ne suffit pas.")
+        else:
+            parts.append("Tous reviendraient octet pour octet.")
+        if memes:
+            parts.append("Attention : l'archive est sur le même volume que "
+                         "la bibliothèque — elle ne survivrait pas à une "
+                         "panne de ce disque.")
+        self.lbl_gauge.setText(" ".join(parts))
         self.lbl_gauge.setStyleSheet(
             "font-size: 11px; color: %s;"
-            % (TERTIARY if projected <= libre else PRIMARY))
+            % (PRIMARY if (not tient or memes) else TERTIARY))
 
     def _load_cloud_fields(self):
-        creds = blob_store.load_credentials()
-        self.input_endpoint.setText(creds["endpoint"])
-        self.input_bucket.setText(creds["bucket"])
-        self.input_region.setText(creds["region"])
-        self.input_access.setText(creds["access_key"])
-        self.input_secret.setText(creds["secret_key"])
+        self.input_archive.setText(sqlite_store.load_config()["root"])
 
     def _cloud_fields(self):
-        return {
-            "endpoint": self.input_endpoint.text().strip(),
-            "region": self.input_region.text().strip() or "auto",
-            "bucket": self.input_bucket.text().strip(),
-            "access_key": self.input_access.text().strip(),
-            "secret_key": self.input_secret.text().strip(),
-            "prefix": blob_store.DEFAULT_PREFIX,
-        }
+        """Ce que le volet décrit : l'emplacement de l'archive."""
+        return {"root": self.input_archive.text().strip(),
+                "prefix": sqlite_store.DEFAULT_PREFIX}
 
     def _store(self):
-        """Client du seau, partagé par l'écran. Lève ``BlobError`` sans seau."""
+        """Magasin courant, partagé par l'écran. Lève ``BlobError`` sans lui."""
         if self._store_cache is None:
-            self._store_cache = blob_store.BlobStore()
+            self._store_cache = library_mirror.open_store(
+                library_mirror.store_credentials())
         return self._store_cache
 
     def _save_cloud(self):
-        fields = self._cloud_fields()
         self._store_cache = None
-        blob_store.save_credentials(
-            fields["endpoint"], fields["region"], fields["bucket"],
-            fields["access_key"], fields["secret_key"], fields["prefix"])
+        sqlite_store.save_config(self.input_archive.text().strip())
         self._load_cloud_fields()
-        self._set_cloud_state("Identifiants enregistrés." if
-                              blob_store.is_configured() else
-                              "Identifiants incomplets : le miroir reste "
-                              "indisponible.")
+        self._set_cloud_state(
+            "Archive enregistrée." if library_mirror.store_is_configured()
+            else "Indiquez le fichier d'archive.")
+        self._refresh_gauge()
         self._refresh_controls()
 
     def _test_cloud(self):
-        """Vérifie la connexion avec ce qui est affiché, sans l'enregistrer.
-
-        Dans un fil séparé : un seau qui ne répond pas met trente secondes à
-        le dire, et la fenêtre ne doit pas rester figée pendant ce temps.
-        """
         if self._check_thread is not None and self._check_thread.isRunning():
             return
-        self._set_cloud_state("Connexion au seau…")
-        self._check_thread = opus_mirror.CheckThread(self._cloud_fields(), self)
+        self._set_cloud_state("Vérification de l'archive…")
+        self._check_thread = library_mirror.CheckThread(
+            self._cloud_fields(), self)
         self._check_thread.checked.connect(self._on_cloud_checked)
         self._check_thread.start()
 
@@ -678,11 +566,11 @@ class LibraryPage(QWidget):
             error=not ok)
 
     def _measure_usage(self):
-        """Compte les objets du seau dans un fil séparé."""
         if self._usage_thread is not None and self._usage_thread.isRunning():
             return
-        self._set_cloud_state("Mesure de l'occupation du seau…")
-        self._usage_thread = opus_mirror.UsageThread(self._cloud_fields(), self)
+        self._set_cloud_state("Mesure de l'archive…")
+        self._usage_thread = library_mirror.UsageThread(
+            self._cloud_fields(), self)
         self._usage_thread.measured.connect(self._on_usage_measured)
         self._usage_thread.start()
 
@@ -690,11 +578,12 @@ class LibraryPage(QWidget):
         if message:
             self._set_cloud_state(message, error=True)
             return
-        share = 100.0 * total / blob_store.FREE_TIER_BYTES
+        chemin = (self.input_archive.text().strip()
+                  or sqlite_store.load_config()["root"])
+        libre = sqlite_store.free_bytes(chemin) if chemin else 0
         self._set_cloud_state(
-            "Seau : %d objets, %s — soit %s %% des 10 Go gratuits."
-            % (count, human_bytes(total),
-               ("%.1f" % share).replace(".", ",")))
+            "%d titres archivés, %s — %s de libre sur le volume."
+            % (count, human_bytes(total), human_bytes(libre)))
 
     def _set_cloud_state(self, message, error=False):
         self.lbl_cloud_state.setText(message)
@@ -714,7 +603,7 @@ class LibraryPage(QWidget):
                 "FROM tracks WHERE deleted = 0")
             mirror = {row["path"]: dict(row) for row in db.query(
                 "SELECT path, sha1, stamp, key, bytes, bitrate, source_bytes "
-                "FROM opus_mirror WHERE deleted = 0")}
+                "FROM archive WHERE deleted = 0")}
         except Exception as exc:                # base illisible : on le dit
             self.lbl_status.setText("Base illisible : %s" % exc)
             return
@@ -741,7 +630,7 @@ class LibraryPage(QWidget):
             # alors que l'envoi, lui, les sonde et les réduirait, et une
             # colonne FORMAT amputée de son débit.
             if entry["exists"] and not (entry.get("bitrate") or 0):
-                entry["bitrate"] = opus_mirror.probe_bitrate(path) or 0
+                entry["bitrate"] = library_mirror.probe_bitrate(path) or 0
             entry["format"] = self._format_of(entry)
             entry["mirror"] = mirror.get(path)
             entries.append(entry)
@@ -764,39 +653,26 @@ class LibraryPage(QWidget):
         return codec or ""
 
     def _refresh_mirror_states(self):
-        """Recalcule l'état de miroir de chaque titre (réglages courants compris)."""
-        rate = self.bitrate()
-        only = self.source_only()
+        """Recalcule l'état d'archive de chaque titre."""
         for entry in self._entries:
-            self._refresh_entry_state(entry, rate, only)
+            self._refresh_entry_state(entry)
 
     def _refresh_entry_state(self, entry, rate=None, source_only=None):
-        """État de miroir d'un seul titre — un envoi en cours n'a que lui à revoir."""
-        target = self.bitrate() if rate is None else rate
-        only = self.source_only() if source_only is None else source_only
-        row = entry.get("mirror")
-        # Débit ignoré de la base : celui que l'envoi a relevé fait foi
-        # (``opus_mirror.probe_bitrate``). Sans ce repli, un titre sondé à
-        # 128 au moment de l'envoi se comparerait ici à un zéro, et se
-        # donnerait pour « à renvoyer » sans fin.
-        known = entry.get("bitrate") or (row or {}).get("bitrate")
-        # Le débit retenu pour ce titre n'est pas forcément celui demandé :
-        # un fichier déjà plus léger part tel quel (voir ``opus_mirror.plan``).
-        planned, as_is = opus_mirror.plan(known, target, only)
-        entry["planned_bitrate"] = planned
-        entry["as_is"] = as_is
-        state = opus_mirror.state_of(row, entry.get("stamp"))
-        # Une copie faite à un autre débit n'est pas celle du réglage
-        # courant : elle est à refaire, pas à jour.
-        if state == opus_mirror.FRESH and row and row.get("bitrate") != planned:
-            state = opus_mirror.STALE
-        entry["state"] = state
-        entry["cloud_order"] = {opus_mirror.FRESH: 0,
-                                opus_mirror.STALE: 1}.get(state, 2)
+        """État d'archive d'un seul titre.
 
-    # ==================================================================
-    # Recherche : filtrage et propositions
-    # ==================================================================
+        ``rate`` et ``source_only`` ne servent plus à rien ; ils restent
+        acceptés pour que les appels existants n'aient pas à changer.
+        """
+        row = entry.get("mirror")
+        entry["planned_bitrate"] = (entry.get("bitrate")
+                                    or (row or {}).get("bitrate") or 0)
+        # Tout entre tel quel : il n'y a plus de cas « réduit ».
+        entry["as_is"] = True
+        state = library_mirror.state_of(row, entry.get("stamp"))
+        entry["state"] = state
+        entry["cloud_order"] = {library_mirror.FRESH: 0,
+                                library_mirror.STALE: 1}.get(state, 2)
+
     def _build_value_index(self):
         """Index des valeurs de tags présentes, pour les propositions.
 
@@ -987,7 +863,7 @@ class LibraryPage(QWidget):
         """
         if entry["exists"] or self.cb_missing.isChecked():
             return True
-        return entry.get("state") == opus_mirror.FRESH
+        return entry.get("state") == library_mirror.FRESH
 
     def _matches(self, entry, tokens):
         haystack = self._haystack(entry)
@@ -1071,7 +947,7 @@ class LibraryPage(QWidget):
                             else Qt.CheckState.Unchecked)
         self.table.setItem(row, LC_CHECK, check)
 
-        playable = entry["exists"] or entry.get("state") == opus_mirror.FRESH
+        playable = entry["exists"] or entry.get("state") == library_mirror.FRESH
         tooltip = ("Écouter ce titre" if entry["exists"] else
                    "Écouter la copie en ligne (fichier absent du disque)")
         self.table.setItem(row, LC_PLAY, player.play_item(
@@ -1102,7 +978,7 @@ class LibraryPage(QWidget):
         """Cellule NUAGE : ce que le seau détient de ce titre."""
         state = entry.get("state")
         mirror = entry.get("mirror") or {}
-        if state == opus_mirror.FRESH:
+        if state == library_mirror.FRESH:
             text = "✓ %s" % human_bytes(mirror.get("bytes"))
             comment = ("copié tel quel (déjà à %s kb/s)"
                        if not str(mirror.get("key") or "").endswith(".opus")
@@ -1111,7 +987,7 @@ class LibraryPage(QWidget):
                 "En miroir : %s, %s.\nClé : %s"
                 % (human_bytes(mirror.get("bytes")),
                    comment % mirror.get("bitrate"), mirror.get("key")))
-        elif state == opus_mirror.STALE:
+        elif state == library_mirror.STALE:
             text, color = "à renvoyer", PRIMARY
             tip = ("Une copie existe en ligne, mais le fichier local a "
                    "changé depuis — ou le débit demandé n'est plus le même.")
@@ -1153,7 +1029,7 @@ class LibraryPage(QWidget):
         disk_bytes = sum(int(entry.get("file_size") or 0)
                          for entry in self._entries if entry["exists"])
         mirrored = [entry for entry in self._entries
-                    if entry.get("state") == opus_mirror.FRESH]
+                    if entry.get("state") == library_mirror.FRESH]
         mirror_bytes = sum(int((entry.get("mirror") or {}).get("bytes") or 0)
                            for entry in mirrored)
         # Poids d'origine des seuls titres en miroir : comparer les 2 Go du
@@ -1162,7 +1038,7 @@ class LibraryPage(QWidget):
             int((entry.get("mirror") or {}).get("source_bytes") or 0)
             for entry in mirrored)
         stale = sum(1 for entry in self._entries
-                    if entry.get("state") == opus_mirror.STALE)
+                    if entry.get("state") == library_mirror.STALE)
 
         parts = ["%d titres affichés sur %d" % (shown, total),
                  "%d sur le disque (%s)" % (on_disk, human_bytes(disk_bytes))]
@@ -1182,21 +1058,27 @@ class LibraryPage(QWidget):
         # liste : ils ne peuvent pas tourner ensemble, et « Arrêter » vaut
         # pour celui des deux qui travaille.
         running = self._busy()
-        configured = blob_store.is_configured()
+        configured = library_mirror.store_is_configured()
         self.btn_mirror.setEnabled(not running and configured)
         self.btn_restore.setEnabled(not running and configured)
         self.btn_stop.setEnabled(running)
         self.btn_refresh.setEnabled(not running)
-        unconfigured = (
-            "Aucun seau configuré : ouvrez le volet « Nuage » pour renseigner "
-            "le point d'entrée, le seau et les clés d'accès.")
         self.btn_mirror.setToolTip(
-            "Réencoder les titres cochés en Opus et les déposer dans le seau"
-            if configured else unconfigured)
+            "Copier les titres cochés dans l'archive, tels quels — aucun "
+            "réencodage, rien n'est perdu"
+            if configured else
+            "Aucune archive configurée : ouvrez le volet « Archive » et "
+            "indiquez le fichier où ranger les titres.")
         self.btn_restore.setToolTip(
             "Redescendre du seau les titres qui ne sont plus sur le disque. "
             "Rien n'est écrasé : seuls les fichiers absents sont écrits."
             if configured else unconfigured)
+
+    def _unconfigured_text(self):
+        """Ce qui manque pour que la destination courante soit utilisable."""
+        return ("Aucune archive configurée. Ouvrez le volet « Archive » et "
+                "indiquez le fichier où ranger les titres, puis "
+                "« Enregistrer ».")
 
     def _busy(self):
         """Vrai si l'un des deux sens du miroir est en cours."""
@@ -1283,13 +1165,13 @@ class LibraryPage(QWidget):
                 path=entry["path"], title=entry.get("title") or "",
                 artist=entry.get("artist") or "",
                 album=entry.get("album") or "", subtitle=subtitle)
-        if entry.get("state") != opus_mirror.FRESH:
+        if entry.get("state") != library_mirror.FRESH:
             return None
         # Fichier disparu, copie en ligne à jour : le lecteur joue le flux
         # servi par le seau. L'URL est signée à la demande et vaut une heure.
         try:
             url = self._store().presigned_get(entry["mirror"]["key"])
-        except blob_store.BlobError:
+        except sqlite_store.BlobError:
             return None
         return player.make_track(
             url=url, title=entry.get("title") or "",
@@ -1308,17 +1190,18 @@ class LibraryPage(QWidget):
         listen = menu.addAction("Écouter dans le lecteur",
                                 lambda: self._play(row))
         listen.setEnabled(entry["exists"]
-                          or entry.get("state") == opus_mirror.FRESH)
+                          or entry.get("state") == library_mirror.FRESH)
         folder = menu.addAction(
             "Ouvrir le dossier", lambda: reveal_in_explorer(entry["path"]))
         folder.setEnabled(entry["exists"])
         menu.addSeparator()
         send = menu.addAction("Envoyer ce titre au nuage",
                               lambda: self._mirror_paths([entry]))
-        send.setEnabled(entry["exists"] and blob_store.is_configured())
+        pret = library_mirror.store_is_configured()
+        send.setEnabled(entry["exists"] and pret)
         back = menu.addAction("Restaurer ce titre depuis le nuage",
                               lambda: self._restore_entries([entry]))
-        back.setEnabled(self._restorable(entry) and blob_store.is_configured())
+        back.setEnabled(self._restorable(entry) and pret)
         drop = menu.addAction("Retirer du nuage",
                               lambda: self._drop_from_mirror(entry))
         drop.setEnabled(bool(entry.get("mirror")))
@@ -1334,14 +1217,14 @@ class LibraryPage(QWidget):
             return
         try:
             store = self._store()
-        except blob_store.BlobError as exc:
-            QMessageBox.warning(self, "Nuage", str(exc))
+        except sqlite_store.BlobError as exc:
+            QMessageBox.warning(self, "Archive", str(exc))
             return
-        ok, message = opus_mirror.remove_from_mirror(store, row)
+        ok, message = library_mirror.remove_from_mirror(store, row)
         if not ok:
-            QMessageBox.warning(self, "Nuage", message)
+            QMessageBox.warning(self, "Archive", message)
             return
-        local_db.shared().mark_deleted("opus_mirror", [row["path"]])
+        local_db.shared().mark_deleted("archive", [row["path"]])
         entry["mirror"] = None
         self._refilter()
 
@@ -1353,7 +1236,7 @@ class LibraryPage(QWidget):
         entries = self._selected_entries()
         if not entries:
             answer = QMessageBox.question(
-                self, "Envoyer au nuage",
+                self, "Archiver",
                 "Aucun titre coché. Envoyer les %d titres affichés ?"
                 % len(self._rows))
             if answer != QMessageBox.StandardButton.Yes:
@@ -1364,19 +1247,15 @@ class LibraryPage(QWidget):
     def _mirror_paths(self, entries):
         if self._busy():
             return
-        if not blob_store.is_configured():
-            QMessageBox.information(
-                self, "Nuage",
-                "Aucun seau configuré. Ouvrez le volet « Nuage » et "
-                "renseignez le point d'entrée, le nom du seau et les deux "
-                "clés d'accès.")
+        if not library_mirror.store_is_configured():
+            QMessageBox.information(self, "Archive", self._unconfigured_text())
             self.btn_cloud_panel.setChecked(True)
             return
 
         todo = [entry for entry in entries if entry["exists"]]
         if not todo:
             QMessageBox.information(
-                self, "Nuage",
+                self, "Archive",
                 "Aucun des titres retenus n'est présent sur le disque : il "
                 "n'y a rien à réencoder.")
             return
@@ -1391,11 +1270,10 @@ class LibraryPage(QWidget):
         self.progress.setVisible(True)
         self._set_cloud_state("Envoi de %d titres en cours…" % len(todo))
 
-        self._mirror_thread = opus_mirror.MirrorThread(
+        self._mirror_thread = library_mirror.MirrorThread(
             [(entry["path"], entry.get("bitrate")) for entry in todo],
             known=known,
-            bitrate=self.bitrate(), credentials=blob_store.load_credentials(),
-            source_only=self.source_only(), parent=self)
+            credentials=library_mirror.store_credentials(), parent=self)
         self._mirror_thread.done.connect(self._on_mirror_done)
         self._mirror_thread.progress.connect(self._on_mirror_progress)
         self._mirror_thread.completed.connect(self._on_mirror_completed)
@@ -1423,10 +1301,10 @@ class LibraryPage(QWidget):
             # C'est le fil de l'interface qui écrit : la ligne part ainsi
             # dans la file de synchronisation comme n'importe quelle autre
             # écriture de l'application (voir ``local_db.upsert``).
-            local_db.shared().upsert("opus_mirror", row)
+            local_db.shared().upsert("archive", row)
             entry["mirror"] = dict(row)
         self._refresh_entry_state(entry)
-        if state == opus_mirror.MirrorThread.FAILED:
+        if state == library_mirror.MirrorThread.FAILED:
             self._set_status_cell(entry, "échec", ERROR)
             self.lbl_status.setText("%s — %s"
                                     % (os.path.basename(path), message))
@@ -1454,7 +1332,7 @@ class LibraryPage(QWidget):
         Il le peut si le seau en détient une copie et si le fichier qu'elle
         rendrait n'est pas déjà là. La destination n'est pas toujours le
         chemin d'origine — une copie réduite en Opus revient à côté, sous
-        son extension (voir ``opus_mirror.restore_target``) — et c'est bien
+        son extension (voir ``library_mirror.restore_target``) — et c'est bien
         elle qu'il faut regarder : c'est elle qui serait écrite.
 
         L'état de miroir (à jour, à renvoyer) n'entre pas en compte. Il dit
@@ -1465,7 +1343,7 @@ class LibraryPage(QWidget):
         row = entry.get("mirror") or {}
         if not row.get("key"):
             return False
-        destination, _identical = opus_mirror.restore_target(
+        destination, _identical = library_mirror.restore_target(
             entry["path"], row["key"])
         return not os.path.exists(destination)
 
@@ -1509,12 +1387,8 @@ class LibraryPage(QWidget):
     def _restore_entries(self, entries):
         if self._busy():
             return
-        if not blob_store.is_configured():
-            QMessageBox.information(
-                self, "Nuage",
-                "Aucun seau configuré. Ouvrez le volet « Nuage » et "
-                "renseignez le point d'entrée, le nom du seau et les deux "
-                "clés d'accès.")
+        if not library_mirror.store_is_configured():
+            QMessageBox.information(self, "Archive", self._unconfigured_text())
             self.btn_cloud_panel.setChecked(True)
             return
 
@@ -1529,9 +1403,9 @@ class LibraryPage(QWidget):
         self.progress.setVisible(True)
         self._set_cloud_state("Restauration de %d titres en cours…" % len(todo))
 
-        self._restore_thread = opus_mirror.RestoreThread(
+        self._restore_thread = library_mirror.RestoreThread(
             [entry["mirror"] for entry in todo],
-            credentials=blob_store.load_credentials(), parent=self)
+            credentials=library_mirror.store_credentials(), parent=self)
         self._restore_thread.done.connect(self._on_restore_done)
         self._restore_thread.progress.connect(self._on_restore_progress)
         self._restore_thread.completed.connect(self._on_restore_completed)
@@ -1552,16 +1426,16 @@ class LibraryPage(QWidget):
             # sans cette empreinte remise à jour, tout ce qui vient d'être
             # restauré se donnerait pour « à renvoyer » et repartirait vers
             # le seau alors qu'il s'y trouve déjà, à l'identique.
-            local_db.shared().upsert("opus_mirror", row)
+            local_db.shared().upsert("archive", row)
             entry["mirror"] = dict(row)
             entry["stamp"] = row.get("stamp") or ""
-        if state == opus_mirror.RestoreThread.FAILED:
+        if state == library_mirror.RestoreThread.FAILED:
             self._set_status_cell(entry, "échec", ERROR)
             self.lbl_status.setText("%s — %s"
                                     % (os.path.basename(path), message))
-        elif state == opus_mirror.RestoreThread.DEGRADED:
+        elif state == library_mirror.RestoreThread.DEGRADED:
             self._set_status_cell(entry, "converti", PRIMARY)
-        elif state == opus_mirror.RestoreThread.RESTORED:
+        elif state == library_mirror.RestoreThread.RESTORED:
             self._set_status_cell(entry, "rendu", TERTIARY)
 
     def _on_restore_completed(self, restored, degraded, skipped, failed,

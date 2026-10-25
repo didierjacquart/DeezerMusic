@@ -1207,7 +1207,7 @@ class DeeKeepApp(QMainWindow):
 
         # --- PAGE 8 : BIBLIOTHÈQUE (LISTER, CHERCHER, ÉCOUTER) ---
         # La page se sert de la base et non du disque : elle s'ouvre sans
-        # rien relire, et son miroir Opus (voir ``opus_mirror``) tourne en
+        # rien relire, et son archive (voir ``library_mirror``) tourne en
         # tâche de fond comme les autres analyses.
         self.library_page = LibraryPage(
             app_settings=self.settings,
