@@ -17,7 +17,7 @@ lancer une seconde tant que la première n'est pas rendue.
 import os
 import time
 
-from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QProgressBar, QPushButton, QVBoxLayout, QWidget
@@ -469,12 +469,17 @@ class DatabasePanel(QWidget):
             "font-weight: bold; color: #00e5ff;")
         layout.addWidget(title)
 
+        # Style limité à la carte (voir la carte d'exportation) : sans
+        # sélecteur, il s'appliquerait aussi aux libellés et aux champs.
         card = QWidget()
+        card.setObjectName("databaseCard")
+        card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         card.setStyleSheet(
-            "background-color: rgba(28, 30, 38, 0.60); "
+            "QWidget#databaseCard { background-color: rgba(28, 30, 38, 0.60); "
             "border: 1px solid rgba(255, 255, 255, 0.08); "
-            "border-radius: 12px; padding: 20px;")
+            "border-radius: 12px; }")
         card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(20, 20, 20, 20)
         card_layout.setSpacing(14)
 
         intro = QLabel(

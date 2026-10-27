@@ -1021,12 +1021,18 @@ class DeeKeepApp(QMainWindow):
         )
         parametres_layout.addWidget(lbl_params_title)
 
+        # Style limité à la carte par son nom d'objet : sans sélecteur, une
+        # feuille de style s'applique aussi à tous les enfants, et la marge
+        # intérieure de 20 px rognait le texte des libellés et des champs.
         card_widget = QWidget()
+        card_widget.setObjectName("settingsCard")
+        card_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         card_widget.setStyleSheet(
-            "background-color: rgba(28, 30, 38, 0.60); border: 1px solid rgba(255, 255, 255, 0.08); "
-            "border-radius: 12px; padding: 20px;"
+            "QWidget#settingsCard { background-color: rgba(28, 30, 38, 0.60); "
+            "border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; }"
         )
         card_layout = QVBoxLayout(card_widget)
+        card_layout.setContentsMargins(20, 20, 20, 20)
         card_layout.setSpacing(15)
 
         # Paramétrage du format
@@ -1123,9 +1129,8 @@ class DeeKeepApp(QMainWindow):
         self.spin_org_divers_min.setRange(2, 10)
         self.spin_org_divers_min.setValue(3)
         self.spin_org_divers_min.setSuffix(" titres")
-        # Pas de largeur fixe : la carte des Paramètres impose aux champs
-        # qu'elle contient une marge intérieure généreuse, qui tronquerait
-        # le suffixe (« 3 titre »).
+        # Largeur minimale plutôt que fixe : une largeur trop juste
+        # tronquerait le suffixe (« 3 titre »).
         self.spin_org_divers_min.setMinimumWidth(160)
         divers_layout.addWidget(self.cb_org_divers)
         divers_layout.addWidget(self.spin_org_divers_min)
